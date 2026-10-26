@@ -1,4 +1,5 @@
 #import "touch_pad.h"
+#include "touch_layout.h"
 #import <GameController/GameController.h>
 #include <math.h>
 #include "runtime.h"
@@ -9,21 +10,24 @@
    until a finger takes it; the sticks sit a little toward the middle. L3 / R3 (stick press) are in the bottom corners,
    under ZL / ZR.
    A touch that misses every button is a stick, centred where the finger went down: the left stick on the left half,
-   the camera (right stick) on the right half. Bits are the Npad buttons. While a game controller is connected the layer
-   is hidden; a touch shows it and works as usual, and it hides again 3 seconds after the last finger lifts.
+   the camera (right stick) on the right half. Bits are the Npad buttons. iPad defaults to controller-only play: the
+   touch layer stays hidden and ignores touches. Settings can enable automatic or always-visible touch controls.
+   Automatic mode (the iPhone default) hides with a controller; touching shows it until 3 seconds after fingers lift.
    Between − and + a smaller button shows the frame rate the game is held to, 60 or 30; a tap switches it at once and
    keeps the choice for the next start (TOTK_PHONE_FPS in the app's defaults, also in the Settings app). */
 typedef struct { CGPoint at; uint64_t bit; NSString *label; CGFloat size; } TouchButton;
 enum { kButtonCount = 16 };
-static const CGFloat kButtonSize = 46;
+static const CGFloat kButtonSize = TOUCH_BUTTON_SIZE;
 static const NSTimeInterval kHideAfter = 3;   // seconds after the last finger lifts, with a controller connected
 static const CGFloat kFpsButtonSize = 34;
+typedef NS_ENUM(NSInteger, TouchControlsMode) { TouchControlsAutomatic, TouchControlsOn, TouchControlsOff };
 
 @implementation TOTKTouchPad {
     NSMapTable<UITouch *, NSValue *> *points;
     NSMapTable<UITouch *, NSValue *> *leftOrigins;    // where each left-stick touch went down
     NSMapTable<UITouch *, NSValue *> *rightOrigins;   // the same for the camera stick
-    BOOL gamepad, concealed;                          // a controller is connected; the layer is hidden for it
+    BOOL gamepad, concealed;                          // a controller is connected; touch controls are not drawn
+    TouchControlsMode controlsMode;
     NSTimer *hideTimer;
 }
 
@@ -36,9 +40,31 @@ static const CGFloat kFpsButtonSize = 34;
         NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
         [center addObserver:self selector:@selector(controllersChanged:) name:GCControllerDidConnectNotification object:nil];
         [center addObserver:self selector:@selector(controllersChanged:) name:GCControllerDidDisconnectNotification object:nil];
+        [center addObserver:self selector:@selector(preferencesChanged:) name:NSUserDefaultsDidChangeNotification object:nil];
+        [center addObserver:self selector:@selector(preferencesChanged:) name:UIApplicationDidBecomeActiveNotification object:nil];
+        [self preferencesChanged:nil];
         [self controllersChanged:nil];
     }
     return self;
+}
+
+- (void)preferencesChanged:(NSNotification *)note {
+    (void)note;
+    if (!NSThread.isMainThread) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self preferencesChanged:nil]; });
+        return;
+    }
+    NSString *value = [NSUserDefaults.standardUserDefaults stringForKey:@"TOTK_TOUCH_CONTROLS"];
+    TouchControlsMode next = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad ? TouchControlsOff : TouchControlsAutomatic;
+    if ([value isEqualToString:@"auto"]) next = TouchControlsAutomatic;
+    else if ([value isEqualToString:@"on"]) next = TouchControlsOn;
+    else if ([value isEqualToString:@"off"]) next = TouchControlsOff;
+    if (next == controlsMode) return;
+    controlsMode = next; [hideTimer invalidate]; hideTimer = nil;
+    self.hidden = controlsMode == TouchControlsOff;
+    self.userInteractionEnabled = !self.hidden;
+    if (self.hidden || (controlsMode == TouchControlsAutomatic && gamepad)) [self conceal];
+    else { concealed = NO; [self updateState]; }
 }
 
 - (void)controllersChanged:(NSNotification *)note {
@@ -47,7 +73,8 @@ static const CGFloat kFpsButtonSize = 34;
         if (controller.extendedGamepad && !([note.name isEqualToString:GCControllerDidDisconnectNotification] && controller == note.object)) connected = YES;
     if (connected == gamepad) return;
     gamepad = connected; [hideTimer invalidate]; hideTimer = nil;
-    if (gamepad) [self conceal]; else { concealed = NO; [self setNeedsDisplay]; }
+    if (controlsMode == TouchControlsOff || (controlsMode == TouchControlsAutomatic && gamepad)) [self conceal];
+    else { concealed = NO; [self updateState]; }
 }
 
 - (void)conceal {
@@ -58,55 +85,46 @@ static const CGFloat kFpsButtonSize = 34;
 
 - (void)hideLater {
     [hideTimer invalidate]; hideTimer = nil;
-    if (!gamepad || points.count) return;
+    if (controlsMode != TouchControlsAutomatic || !gamepad || points.count) return;
     __weak TOTKTouchPad *weakSelf = self;
     hideTimer = [NSTimer scheduledTimerWithTimeInterval:kHideAfter repeats:NO block:^(NSTimer *timer) {
         (void)timer; TOTKTouchPad *pad = weakSelf; if (pad) [pad concealIfIdle];
     }];
 }
-- (void)concealIfIdle { if (gamepad && !points.count) [self conceal]; }
+- (void)concealIfIdle { if (controlsMode == TouchControlsAutomatic && gamepad && !points.count) [self conceal]; }
 
-- (CGRect)area { return UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets); }
-- (CGFloat)stickRadius { return MIN(70, self.area.size.height * .16); }
+- (TouchPadLayout)layout {
+    CGRect a = UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets);
+    UIUserInterfaceIdiom idiom = self.traitCollection.userInterfaceIdiom;
+    return touch_pad_layout(a.origin.x, a.origin.y, a.size.width, a.size.height,
+                            MAX(self.safeAreaInsets.left, self.safeAreaInsets.right),
+                            idiom == UIUserInterfaceIdiomPhone, idiom == UIUserInterfaceIdiomPad);
+}
+- (CGRect)area { TouchPadLayout a = self.layout; return CGRectMake(a.x, a.y, a.width, a.height); }
+- (CGFloat)stickRadius { return self.layout.stick_radius; }
 /* Distance between the centre of a button diamond (A/B/X/Y, the d-pad) and each of its buttons. */
-- (CGFloat)diamond { return MIN(52, self.area.size.height * .14); }
+- (CGFloat)diamond { return self.layout.diamond; }
 - (CGFloat)hitRadius { return MIN(36, self.diamond * .68); }
-/* How far the two columns sit inside the safe area: 14% of its width. On an iPhone they move halfway from there toward
-   the screen edge, so the gap between the screen edge and the d-pad or A/B/X/Y is half as wide (the user's choice,
-   2026-10-19; about 38 points on an iPhone 14, clear of the notch); the stick rings stay inside the safe area. */
-- (CGFloat)columnInset {
-    CGFloat full = self.area.size.width * .14;
-    if (self.traitCollection.userInterfaceIdiom != UIUserInterfaceIdiomPhone) return full;
-    CGFloat side = MAX(self.safeAreaInsets.left, self.safeAreaInsets.right), edgeGap = side + full - (self.diamond + kButtonSize / 2);
-    return MAX(full - edgeGap / 2, self.stickRadius + 4);
-}
-/* The shoulder buttons move outward the same way on an iPhone: the gap between the screen edge and ZL / ZR is halved,
-   and L / R move with them. */
-- (CGFloat)shoulderShift {
-    if (self.traitCollection.userInterfaceIdiom != UIUserInterfaceIdiomPhone) return 0;
-    CGFloat side = MAX(self.safeAreaInsets.left, self.safeAreaInsets.right);
-    return (side + self.area.size.width * .05 - kButtonSize / 2) / 2;
-}
 - (CGPoint)restingStick:(BOOL)right {
-    CGRect a = self.area; CGFloat inset = self.columnInset + self.stickRadius * 1.9;
+    CGRect a = self.area; CGFloat inset = self.layout.stick_inset;
     return CGPointMake(right ? CGRectGetMaxX(a) - inset : CGRectGetMinX(a) + inset, CGRectGetMinY(a) + a.size.height * .80);
 }
 
 - (void)buttons:(TouchButton *)b {
     CGRect a = self.area; CGFloat x = CGRectGetMinX(a), y = CGRectGetMinY(a), w = a.size.width, h = a.size.height, d = self.diamond;
-    CGFloat top = y + h * .12, bottom = y + h * .88;
-    CGFloat inset = self.columnInset, shift = self.shoulderShift;
+    TouchPadLayout layout = self.layout; CGFloat inset = layout.column, outer = layout.outer, inner = layout.inner;
+    CGFloat top = y + layout.top, bottom = y + h * .88;
     CGPoint face = CGPointMake(x + w - inset, y + h * .42), pad = CGPointMake(x + inset, y + h * .42);
     TouchButton all[kButtonCount] = {
         {{face.x + d, face.y}, 1, @"A", kButtonSize}, {{face.x, face.y + d}, 2, @"B", kButtonSize}, {{face.x, face.y - d}, 4, @"X", kButtonSize}, {{face.x - d, face.y}, 8, @"Y", kButtonSize},
-        {{x + w * .05 - shift, top}, 256, @"ZL", kButtonSize}, {{x + w * .16 - shift, top}, 64, @"L", kButtonSize}, {{x + w * .84 + shift, top}, 128, @"R", kButtonSize}, {{x + w * .95 + shift, top}, 512, @"ZR", kButtonSize},
+        {{x + outer, top}, 256, @"ZL", kButtonSize}, {{x + inner, top}, 64, @"L", kButtonSize}, {{x + w - inner, top}, 128, @"R", kButtonSize}, {{x + w - outer, top}, 512, @"ZR", kButtonSize},
         {{x + w * .40, top}, 2048, @"−", kButtonSize}, {{x + w * .60, top}, 1024, @"+", kButtonSize},
         {{pad.x - d, pad.y}, 4096, @"◀", kButtonSize}, {{pad.x, pad.y - d}, 8192, @"▲", kButtonSize}, {{pad.x + d, pad.y}, 16384, @"▶", kButtonSize}, {{pad.x, pad.y + d}, 32768, @"▼", kButtonSize},
-        {{x + w * .05 - shift, bottom}, 16, @"L3", kButtonSize}, {{x + w * .95 + shift, bottom}, 32, @"R3", kButtonSize}};
+        {{x + outer, bottom}, 16, @"L3", kButtonSize}, {{x + w - outer, bottom}, 32, @"R3", kButtonSize}};
     for (int i = 0; i < kButtonCount; i++) b[i] = all[i];
 }
 
-- (CGPoint)fpsButton { CGRect a = self.area; return CGPointMake(CGRectGetMidX(a), CGRectGetMinY(a) + a.size.height * .12); }
+- (CGPoint)fpsButton { CGRect a = self.area; return CGPointMake(CGRectGetMidX(a), CGRectGetMinY(a) + self.layout.top); }
 - (BOOL)fpsButtonAt:(CGPoint)p { CGPoint f = self.fpsButton; return hypot(p.x - f.x, p.y - f.y) < kFpsButtonSize * .75; }
 - (void)switchFrameRate {
     int fps = runtime_phone_fps() == 30 ? 60 : 30;
@@ -128,7 +146,7 @@ static void stick_axes(CGPoint from, CGPoint to, CGFloat radius, int32_t *x, int
 }
 
 - (void)updateState {
-    RuntimeGamepadState s = {.connected = 1}; CGFloat radius = self.stickRadius;
+    RuntimeGamepadState s = {.connected = !concealed}; CGFloat radius = self.stickRadius;
     for (UITouch *t in points.keyEnumerator) {
         CGPoint p = [points objectForKey:t].CGPointValue; NSValue *left = [leftOrigins objectForKey:t], *right = [rightOrigins objectForKey:t];
         if (left) stick_axes(left.CGPointValue, p, radius, &s.lx, &s.ly);
@@ -139,6 +157,7 @@ static void stick_axes(CGPoint from, CGPoint to, CGFloat radius, int32_t *x, int
 }
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if (controlsMode == TouchControlsOff) return;
     (void)event; concealed = NO; [hideTimer invalidate]; hideTimer = nil;
     for (UITouch *t in touches) {
         CGPoint p = [t locationInView:self]; NSValue *v = [NSValue valueWithCGPoint:p]; [points setObject:v forKey:t];
@@ -149,6 +168,7 @@ static void stick_axes(CGPoint from, CGPoint to, CGFloat radius, int32_t *x, int
     [self updateState];
 }
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if (controlsMode == TouchControlsOff) return;
     (void)event;
     for (UITouch *t in touches) [points setObject:[NSValue valueWithCGPoint:[t locationInView:self]] forKey:t];
     [self updateState];

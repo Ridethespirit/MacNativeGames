@@ -1,5 +1,6 @@
 """games/totk/ios/tools/build_ipa.py: what an iOS build leaves out of the way and copies (2026-10-23)."""
 import sys
+import plistlib
 import tempfile
 import time
 import unittest
@@ -9,6 +10,45 @@ TOOLS = Path(__file__).resolve().parents[1]/'games/totk/ios/tools'
 sys.path.insert(0, str(TOOLS))
 import build_ipa  # noqa: E402
 import install_device  # noqa: E402
+
+
+class UniversalProduct(unittest.TestCase):
+    def setUp(self):
+        self.info = {'UIDeviceFamily': [1, 2], 'UILaunchScreen': {},
+                     'UISupportedInterfaceOrientations': ['UIInterfaceOrientationLandscapeLeft',
+                                                          'UIInterfaceOrientationLandscapeRight']}
+
+    def validate(self):
+        with tempfile.TemporaryDirectory() as d:
+            app = Path(d)
+            (app/'Info.plist').write_bytes(plistlib.dumps(self.info, fmt=plistlib.FMT_BINARY))
+            build_ipa.validate_ios_product(app)
+
+    def test_both_games_use_a_universal_landscape_product(self):
+        for game in ('botw', 'totk'):
+            with self.subTest(game=game):
+                self.info['CFBundleIdentifier'] = 'org.macnativegames.' + game
+                self.validate()
+
+    def test_phone_only_pad_only_and_missing_family_are_rejected(self):
+        for family in ([1], [2], []):
+            with self.subTest(family=family), self.assertRaisesRegex(RuntimeError, 'both iPhone and iPad'):
+                self.info['UIDeviceFamily'] = family
+                self.validate()
+
+    def test_ipad_orientation_override_is_checked(self):
+        self.info['UISupportedInterfaceOrientations~ipad'] = ['UIInterfaceOrientationPortrait']
+        with self.assertRaisesRegex(RuntimeError, 'both landscape orientations'):
+            self.validate()
+        self.info['UISupportedInterfaceOrientations~ipad'] = self.info['UISupportedInterfaceOrientations']
+        self.validate()
+
+    def test_launch_screen_is_required_but_an_empty_dictionary_is_valid(self):
+        del self.info['UILaunchScreen']
+        with self.assertRaisesRegex(RuntimeError, 'launch screen'):
+            self.validate()
+        self.info['UILaunchStoryboardName'] = 'LaunchScreen'
+        self.validate()
 
 
 class Discard(unittest.TestCase):

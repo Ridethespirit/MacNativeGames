@@ -51,7 +51,7 @@ def card_image(folder):
     return xci
 
 
-def run_main(case, folder, base, update=None, dlcs=(), game='botw', stop='step_code_botw', fonts=True, version='botw190'):
+def run_main(case, folder, base, update=None, dlcs=(), game='botw', stop='step_code_botw', fonts=True, version='botw190', extra=()):
     """build_app.main with the long steps mocked: it stops at `stop` (Stop) or at the first BuildError, which it returns
     with the started mocks. fonts=False leaves out --firmware; version is what the update is identified as."""
     keys = folder / 'prod.keys'
@@ -63,6 +63,7 @@ def run_main(case, folder, base, update=None, dlcs=(), game='botw', stop='step_c
         argv += ['--update', str(update)]
     for dlc in dlcs:
         argv += ['--dlc', str(dlc)]
+    argv += list(extra)
 
     def prepare_work(work, py, logs):
         work.mkdir(parents=True, exist_ok=True)
@@ -93,6 +94,26 @@ class GameSelectionTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name)
+
+    def test_botw_versions_reach_the_shared_ios_packager(self):
+        base = package(self.root, 'botw.nsp', BOTW_BASE)
+        update = package(self.root, 'update.nsp', BOTW_UPDATE)
+        for version in ('botw160', 'botw190'):
+            with self.subTest(version=version), \
+                    mock.patch.object(build_app, 'step_shaders_botw'), \
+                    mock.patch.object(build_app, 'step_shader_libs'), \
+                    mock.patch.object(build_app, 'step_binary'), \
+                    mock.patch.object(build_app, 'run', side_effect=Stop) as package_app:
+                error, _ = run_main(self, self.root, base, update, stop='package', version=version,
+                                    extra=('--platform', 'ios', '--ios-game-data', 'documents'))
+                self.assertIsInstance(error, Stop)
+                package_app.assert_called_once()
+                args = package_app.call_args.args[0]
+                self.assertEqual(args[1], 'ios/tools/build_ipa.py')
+                self.assertEqual(args[args.index('--version') + 1], version)
+                self.assertEqual(args[args.index('--bundle-id') + 1], 'org.macnativegames.botw')
+                self.assertEqual(args[args.index('--out') + 1].suffix, '.ipa')
+                self.assertIn('--image-outside', args)
 
     def test_ticket_title_ids_and_kinds(self):
         for title_id in (BOTW_BASE, BOTW_UPDATE, BOTW_DLC):

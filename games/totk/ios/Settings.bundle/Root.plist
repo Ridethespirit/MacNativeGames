@@ -78,7 +78,7 @@
 			<key>Title</key>
 			<string>幀率 · Frame rate</string>
 			<key>FooterText</key>
-			<string>鎖 30 幀畫面更穩、手機更涼；遊戲中也可以點觸控按鍵中間的 60 / 30 切換 · 30 is steadier and keeps the phone cooler; the 60 / 30 button between − and + of the touch controls switches it while playing</string>
+			<string>鎖 30 幀畫面更穩、裝置更涼。隱藏觸控按鍵時可在此設定，重新啟動遊戲後生效；顯示觸控按鍵時也可在遊戲中切換 · 30 is steadier and keeps the device cooler. With touch controls hidden, choose here and relaunch; visible touch controls also let you switch while playing</string>
 		</dict>
 		<dict>
 			<key>Type</key>
@@ -98,6 +98,38 @@
 			<array>
 				<string>最高 60 · Up to 60</string>
 				<string>鎖 30 · Held at 30</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+			<key>Title</key>
+			<string>操作 · Controls</string>
+			<key>FooterText</key>
+			<string>iPad 預設隱藏，請先連接手柄；隱藏時觸碰螢幕不會顯示按鍵或操作遊戲。iPhone 預設自動。返回遊戲後生效 · iPad defaults to hidden: connect a controller first. Hidden mode ignores screen touches. iPhone defaults to automatic. Takes effect when returning to the game</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSMultiValueSpecifier</string>
+			<key>Key</key>
+			<string>TOTK_TOUCH_CONTROLS</string>
+			<key>Title</key>
+			<string>觸控按鍵 · Touch controls</string>
+			<key>DefaultValue</key>
+			<string></string>
+			<key>Values</key>
+			<array>
+				<string></string>
+				<string>off</string>
+				<string>auto</string>
+				<string>on</string>
+			</array>
+			<key>Titles</key>
+			<array>
+				<string>裝置預設 · Device default</string>
+				<string>隱藏（僅手柄）· Hidden (controller only)</string>
+				<string>自動（連接手柄時隱藏）· Automatic</string>
+				<string>總是顯示 · Always visible</string>
 			</array>
 		</dict>
 		<dict>

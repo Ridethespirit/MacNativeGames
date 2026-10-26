@@ -1047,11 +1047,11 @@ static void botw_aspect_apply(void) {
     const float game = 16.0f / 9.0f;
     if (atomic_load(&g_uw_on)) {
         if (now == g_uw_wide) { atomic_store(&g_uw_effective, 1); return; }
+        atomic_store(&g_uw_effective, 0);   /* a resized view must wait until the camera takes its new ratio */
         if (fabsf(now - game) > 1e-4f) {   /* not set up yet (the constructor's 4:3) or another ratio: left as it is */
             static float told; if (now != told) { told = now; fprintf(stderr, "[botw] ultrawide: main camera aspect %g, not 16:9: left as it is\n", now); }
             return;
         }
-        atomic_store(&g_uw_effective, 0);
         memcpy(proj + 0xb0, &g_uw_wide, 4);
         static unsigned rewrites;   /* the game set 16:9 again after a write of ours: it sets the aspect each frame here */
         if (!g_uw_written && !rewrites) fprintf(stderr, "[botw] ultrawide: main camera %p, aspect %g -> %g\n", (void *)proj, now, g_uw_wide);
@@ -1079,19 +1079,23 @@ int runtime_aspect_set_ratio(float r) {
 }
 float runtime_aspect_ratio(void) { return g_uw_main ? (atomic_load(&g_uw_on) ? g_uw_wide : (float)ASPECT_GAME) : 0; }
 float runtime_aspect_start(void) { return g_uw_start; }
-/* iPhone (frontend_ios.m reports the drawable once the view is made): the phone fills its screen as Tears of the Kingdom
-   does there (aspect_patch.h, user 2026-10-23 "iphone 全屏"): the wide ratio becomes the screen's shape (2.16 on an
-   iPhone 14) and is on from the start, so the camera draws that view into the 1280x720 canvas, the present widens it over
-   the screen and the UI is squeezed back to 16:9 (uw_ui_squeeze). No extra memory. A screen not wider than 16:9 (an iPad)
-   keeps the game's 16:9 with bars; TOTK_ASPECT=0 (or 16:9) keeps it everywhere. Mac: the settings panel picks the ratio. */
+/* iPhone / iPad: follow the drawable, including tablet ratios below 16:9. The camera keeps its vertical field of view
+   and draws into the existing 1280x720 canvas; present restores its proportions over the screen. On a narrower view
+   less is visible at the sides. uw_ui_squeeze flattens the HUD before present so text/icons keep their proportions.
+   This does not add Vert+ or change the scene resolution. TOTK_ASPECT=0 (or 16:9) keeps the original letterboxed view.
+   Mac: the settings panel picks the ratio. */
 /* g_uw_view: the drawable's shape, which may come before the main module is patched (botw_aspect_install takes it then). */
 static void botw_aspect_phone(float a) {
 #if TARGET_OS_IPHONE
     const char *e = getenv("TOTK_ASPECT");
-    if ((e && (!strcmp(e, "0") || !strcmp(e, "16:9"))) || !(a > 16.0f / 9.0f * 1.01f) || a > 8.0f) {
+    float target = aspect_effective(a);
+    if ((e && (!strcmp(e, "0") || !strcmp(e, "16:9"))) || !target) {
+        /* Original aspect requested, near 16:9, or invalid view: release the camera override. */
+        atomic_store(&g_uw_on, 0); botw_aspect_word(0); atomic_store(&g_uw_effective, 0);
         fprintf(stderr, "[botw] screen shape %.4f: the game's 16:9%s\n", a, e && *e ? " (TOTK_ASPECT)" : ""); return;
     }
-    g_uw_wide = a; atomic_store(&g_uw_on, 1); botw_aspect_word(1);
+    if (!atomic_load(&g_uw_on) || g_uw_wide != target) atomic_store(&g_uw_effective, 0);
+    g_uw_wide = target; atomic_store(&g_uw_on, 1); botw_aspect_word(1);
     fprintf(stderr, "[botw] full screen: the camera takes the screen's shape %.4f (TOTK_ASPECT=0: 16:9)\n", a);
 #else
     (void)a;

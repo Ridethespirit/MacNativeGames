@@ -75,9 +75,9 @@ void runtime_settings_toggle(void) {}
 @interface TOTKMetalView : UIView @end
 @implementation TOTKMetalView
 + (Class)layerClass { return CAMetalLayer.class; }
-#if TARGET_OS_VISION
+// iPad launch/rotation/window resizing can change the bounds after the Metal layer was attached.
+// TODO(iPad): verify these transitions and safe-area updates on a real device with Xcode.
 - (void)layoutSubviews { [super layoutSubviews]; runtime_ios_sync_drawable(self); }
-#endif
 - (void)safeAreaInsetsDidChange { [super safeAreaInsetsDidChange]; runtime_ios_sync_safe_area(self); }   // the HUD boxes keep out of the notch
 @end
 

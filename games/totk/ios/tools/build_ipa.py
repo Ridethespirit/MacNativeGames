@@ -67,6 +67,19 @@ def seed_reusable(seed, source_hash, source_files, sdk):
             cached.get('ios_metal_flags')==' '.join(METAL_FLAGS) and
             all((seed/(name.removesuffix('.metal')+'.metallib')).is_file() for name in shaders))
 
+def validate_ios_product(app):
+    """Check Xcode's final plist, including the UIDeviceFamily it derives from TARGETED_DEVICE_FAMILY."""
+    info=plistlib.loads((app/'Info.plist').read_bytes())
+    if sorted(info.get('UIDeviceFamily',[])) != [1,2]:
+        raise RuntimeError('iOS app must target both iPhone and iPad (TARGETED_DEVICE_FAMILY = 1,2)')
+    landscape={'UIInterfaceOrientationLandscapeLeft','UIInterfaceOrientationLandscapeRight'}
+    for suffix in ('','~ipad'):
+        orientations=info.get('UISupportedInterfaceOrientations'+suffix,info.get('UISupportedInterfaceOrientations',[]))
+        if not landscape.issubset(orientations):
+            raise RuntimeError('iOS app must support both landscape orientations on iPhone and iPad')
+    if 'UILaunchScreen' not in info and not info.get('UILaunchStoryboardName'):
+        raise RuntimeError('iOS app must declare a launch screen for native iPhone/iPad sizing')
+
 def main():
     p=argparse.ArgumentParser()
     p.add_argument('--tree',type=Path,required=True);p.add_argument('--out',type=Path,required=True)
@@ -157,6 +170,7 @@ def main():
         ios,logs/f'xcodebuild-{a.platform}.log',env)
     app=derived/f'Build/Products/Release-{sdk_name}/TOTK.app'
     if not app.is_dir(): raise RuntimeError(f'Xcode did not produce {app}')
+    if not vision: validate_ios_product(app)
     # Carry the increased-memory-limit entitlement in the executable's ad-hoc signature so re-signing tools keep it;
     # the game's 3.2 GiB pool exceeds the default iOS footprint limit.
     run(['codesign','--force','--sign','-','--entitlements',ios/'Sources/TOTK.entitlements',app/'TOTK'],ios,logs/'ios-entitlements.log',env)
